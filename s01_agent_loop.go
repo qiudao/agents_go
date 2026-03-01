@@ -62,6 +62,27 @@ func runBash(command string) string {
 	return out
 }
 
+// executeTool dispatches a tool call and returns its output.
+func executeTool(b ContentBlock) string {
+	switch b.ToolName {
+	case "bash":
+		command, _ := b.Input["command"].(string)
+		fmt.Printf("\033[33m$ %s\033[0m\n", command)
+		return runBash(command)
+	case "web_search":
+		query, _ := b.Input["query"].(string)
+		fmt.Printf("\033[33m🔍 %s\033[0m\n", query)
+		return webSearch(query)
+	case "web_fetch":
+		fetchURL, _ := b.Input["url"].(string)
+		prompt, _ := b.Input["prompt"].(string)
+		fmt.Printf("\033[33m🌐 %s\033[0m\n", fetchURL)
+		return webFetch(fetchURL, prompt)
+	default:
+		return fmt.Sprintf("Unknown tool: %s", b.ToolName)
+	}
+}
+
 // tools available to the agent.
 var tools = []Tool{
 	{
@@ -71,6 +92,30 @@ var tools = []Tool{
 			"command": map[string]any{
 				"type":        "string",
 				"description": "The shell command to run",
+			},
+		},
+	},
+	{
+		Name:        "web_search",
+		Description: "Search the web using Google. Returns titles, URLs, and snippets for the top results.",
+		Properties: map[string]any{
+			"query": map[string]any{
+				"type":        "string",
+				"description": "The search query",
+			},
+		},
+	},
+	{
+		Name:        "web_fetch",
+		Description: "Fetch a web page and extract key information. A small model preprocesses the content to return only relevant information.",
+		Properties: map[string]any{
+			"url": map[string]any{
+				"type":        "string",
+				"description": "The URL to fetch",
+			},
+			"prompt": map[string]any{
+				"type":        "string",
+				"description": "What information to extract from the page (optional, defaults to general summary)",
 			},
 		},
 	},
@@ -105,9 +150,7 @@ func agentLoop(provider Provider, messages *[]Message) error {
 			case "text":
 				fmt.Println(b.Text)
 			case "tool_use":
-				command, _ := b.Input["command"].(string)
-				fmt.Printf("\033[33m$ %s\033[0m\n", command)
-				output := runBash(command)
+				output := executeTool(b)
 				if len(output) > 200 {
 					fmt.Println(output[:200])
 				} else {
