@@ -137,6 +137,20 @@ func newProvider(prov, model string) (Provider, error) {
 			model,
 		), nil
 
+	case "deepseek":
+		if model == "" {
+			model = "deepseek-chat"
+		}
+		apiKey := os.Getenv("DEEPSEEK_API_KEY")
+		if apiKey == "" {
+			cfg := loadConfig()
+			apiKey = cfg["DEEPSEEK_API_KEY"]
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("DEEPSEEK_API_KEY is required (set in env, .env, or %s)", configPath())
+		}
+		return NewAnthropicProvider(apiKey, "https://api.deepseek.com/anthropic", model), nil
+
 	case "gemini":
 		if model == "" {
 			model = "gemini-2.5-flash"
@@ -198,8 +212,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Hint: run the program and type /models to configure\n")
 		os.Exit(1)
 	}
-	fmt.Printf("Using: %s/%s\n", prov, model)
-
 	cwd, _ := os.Getwd()
 	system := fmt.Sprintf("You are a coding agent at %s. Use bash to solve tasks. Act, don't explain.", cwd)
 
@@ -212,6 +224,8 @@ func main() {
 		Role:    "assistant",
 		Content: []ContentBlock{{Type: "text", Text: "Understood. I'll use bash to help you."}},
 	})
+
+
 
 	rl, err := readline.New("\033[36ms01 >> \033[0m")
 	if err != nil {
@@ -226,11 +240,18 @@ func main() {
 			break
 		}
 		query := strings.TrimSpace(line)
-		if query == "" || query == "q" || query == "exit" {
+		if query == "" {
+			continue
+		}
+		if query == "q" || query == "exit" {
 			break
 		}
 
-		// Handle /models command
+		// Handle slash commands
+		if query == "/usage" {
+			showUsage(prov)
+			continue
+		}
 		if query == "/models" {
 			choice := selectModel(rl)
 			if choice == nil {
@@ -243,7 +264,6 @@ func main() {
 				fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
 				continue
 			}
-			// Switch provider live
 			newProv, err := newProvider(choice.Provider, choice.Model)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -252,9 +272,8 @@ func main() {
 			provider = newProv
 			prov, model = choice.Provider, choice.Model
 			fmt.Printf("Switched to: %s/%s (saved to %s)\n", prov, model, configPath())
-			// Reset conversation
+		
 			messages = messages[:2]
-			fmt.Println()
 			continue
 		}
 
@@ -265,6 +284,6 @@ func main() {
 		if err := agentLoop(provider, &messages); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
-		fmt.Println()
+	
 	}
 }

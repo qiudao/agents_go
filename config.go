@@ -19,6 +19,8 @@ type ModelOption struct {
 var availableModels = []ModelOption{
 	{"gemini", "gemini-2.5-flash", "Gemini 2.5 Flash"},
 	{"gemini", "gemini-2.5-pro", "Gemini 2.5 Pro"},
+	{"deepseek", "deepseek-chat", "DeepSeek V3"},
+	{"deepseek", "deepseek-reasoner", "DeepSeek R1"},
 	{"anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6"},
 	{"anthropic", "claude-opus-4-6", "Claude Opus 4.6"},
 }
