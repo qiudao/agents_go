@@ -1,0 +1,270 @@
+// s01_agent_loop.go - The Agent Loop (Go edition)
+//
+// The entire secret of an AI coding agent in one pattern:
+//
+//	while stop_reason == "tool_use":
+//	    response = LLM(messages, tools)
+//	    execute tools
+//	    append results
+//
+//	+----------+      +-------+      +---------+
+//	|   User   | ---> |  LLM  | ---> |  Tool   |
+//	|  prompt  |      |       |      | execute |
+//	+----------+      +---+---+      +----+----+
+//	                      ^               |
+//	                      |   tool_result |
+//	                      +---------------+
+//	                      (loop continues)
+
+package main
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+
+	"github.com/chzyer/readline"
+	"github.com/joho/godotenv"
+)
+
+var dangerousCommands = []string{"rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"}
+
+func runBash(command string) string {
+	for _, d := range dangerousCommands {
+		if strings.Contains(command, d) {
+			return "Error: Dangerous command blocked"
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "bash", "-c", command)
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return "Error: Timeout (120s)"
+	}
+
+	out := strings.TrimSpace(string(output))
+	if err != nil && out == "" {
+		return fmt.Sprintf("Error: %v", err)
+	}
+	if out == "" {
+		return "(no output)"
+	}
+	if len(out) > 50000 {
+		return out[:50000]
+	}
+	return out
+}
+
+// tools available to the agent.
+var tools = []Tool{
+	{
+		Name:        "bash",
+		Description: "Run a shell command.",
+		Properties: map[string]any{
+			"command": map[string]any{
+				"type":        "string",
+				"description": "The shell command to run",
+			},
+		},
+	},
+}
+
+// agentLoop is the core pattern: call LLM with tools, execute tool calls,
+// feed results back, repeat until the model stops.
+func agentLoop(provider Provider, messages *[]Message) error {
+	for {
+		resp, err := provider.Chat(context.TODO(), *messages, tools)
+		if err != nil {
+			return fmt.Errorf("API error: %w", err)
+		}
+
+		// Append assistant turn
+		*messages = append(*messages, Message{Role: "assistant", Content: resp.Content})
+
+		// If the model didn't call a tool, print text and we're done
+		if !resp.WantsTool {
+			for _, b := range resp.Content {
+				if b.Type == "text" {
+					fmt.Println(b.Text)
+				}
+			}
+			return nil
+		}
+
+		// Execute each tool call, collect results
+		var results []ContentBlock
+		for _, b := range resp.Content {
+			switch b.Type {
+			case "text":
+				fmt.Println(b.Text)
+			case "tool_use":
+				command, _ := b.Input["command"].(string)
+				fmt.Printf("\033[33m$ %s\033[0m\n", command)
+				output := runBash(command)
+				if len(output) > 200 {
+					fmt.Println(output[:200])
+				} else {
+					fmt.Println(output)
+				}
+				results = append(results, ContentBlock{
+					Type:     "tool_result",
+					ToolID:   b.ToolID,
+					ToolName: b.ToolName,
+					Text:     output,
+				})
+			}
+		}
+		*messages = append(*messages, Message{Role: "user", Content: results})
+	}
+}
+
+func newProvider(prov, model string) (Provider, error) {
+	switch prov {
+	case "anthropic":
+		if model == "" {
+			model = "claude-sonnet-4-6"
+		}
+		return NewAnthropicProvider(
+			os.Getenv("ANTHROPIC_API_KEY"),
+			os.Getenv("ANTHROPIC_BASE_URL"),
+			model,
+		), nil
+
+	case "gemini":
+		if model == "" {
+			model = "gemini-2.5-flash"
+		}
+		apiKey := os.Getenv("GEMINI_API_KEY")
+		if apiKey == "" {
+			cfg := loadConfig()
+			apiKey = cfg["GEMINI_API_KEY"]
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("GEMINI_API_KEY is required (set in env, .env, or %s)", configPath())
+		}
+		return NewGeminiProvider(context.Background(), apiKey, model)
+
+	default:
+		return nil, fmt.Errorf("unknown provider: %s (use anthropic or gemini)", prov)
+	}
+}
+
+// resolveProviderModel determines provider+model from: env > config > defaults.
+func resolveProviderModel() (string, string) {
+	prov := os.Getenv("PROVIDER")
+	model := os.Getenv("MODEL_ID")
+	if model == "" {
+		model = os.Getenv("GEMINI_MODEL")
+	}
+
+	if prov == "" {
+		cfg := loadConfig()
+		if p, ok := cfg["PROVIDER"]; ok {
+			prov = p
+		}
+		if model == "" {
+			if m, ok := cfg["MODEL"]; ok {
+				model = m
+			}
+		}
+	}
+
+	if prov == "" {
+		// auto-detect: pick whichever has a key
+		if os.Getenv("GEMINI_API_KEY") != "" {
+			prov = "gemini"
+		} else {
+			prov = "anthropic"
+		}
+	}
+	return prov, model
+}
+
+func main() {
+	godotenv.Load()
+	godotenv.Load("../.env")
+
+	prov, model := resolveProviderModel()
+	provider, err := newProvider(prov, model)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Hint: run the program and type /models to configure\n")
+		os.Exit(1)
+	}
+	fmt.Printf("Using: %s/%s\n", prov, model)
+
+	cwd, _ := os.Getwd()
+	system := fmt.Sprintf("You are a coding agent at %s. Use bash to solve tasks. Act, don't explain.", cwd)
+
+	var messages []Message
+	messages = append(messages, Message{
+		Role:    "user",
+		Content: []ContentBlock{{Type: "text", Text: "[System] " + system}},
+	})
+	messages = append(messages, Message{
+		Role:    "assistant",
+		Content: []ContentBlock{{Type: "text", Text: "Understood. I'll use bash to help you."}},
+	})
+
+	rl, err := readline.New("\033[36ms01 >> \033[0m")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer rl.Close()
+
+	for {
+		line, err := rl.Readline()
+		if err == io.EOF || err == readline.ErrInterrupt {
+			break
+		}
+		query := strings.TrimSpace(line)
+		if query == "" || query == "q" || query == "exit" {
+			break
+		}
+
+		// Handle /models command
+		if query == "/models" {
+			choice := selectModel(rl)
+			if choice == nil {
+				continue
+			}
+			cfg := loadConfig()
+			cfg["PROVIDER"] = choice.Provider
+			cfg["MODEL"] = choice.Model
+			if err := saveConfig(cfg); err != nil {
+				fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
+				continue
+			}
+			// Switch provider live
+			newProv, err := newProvider(choice.Provider, choice.Model)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				continue
+			}
+			provider = newProv
+			prov, model = choice.Provider, choice.Model
+			fmt.Printf("Switched to: %s/%s (saved to %s)\n", prov, model, configPath())
+			// Reset conversation
+			messages = messages[:2]
+			fmt.Println()
+			continue
+		}
+
+		messages = append(messages, Message{
+			Role:    "user",
+			Content: []ContentBlock{{Type: "text", Text: query}},
+		})
+		if err := agentLoop(provider, &messages); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		}
+		fmt.Println()
+	}
+}
