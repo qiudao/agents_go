@@ -23,6 +23,9 @@ var availableModels = []ModelOption{
 	{"deepseek", "deepseek-reasoner", "DeepSeek R1"},
 	{"anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6"},
 	{"anthropic", "claude-opus-4-6", "Claude Opus 4.6"},
+	{"qwen", "qwen-turbo", "Qwen Turbo"},
+	{"qwen", "qwen-plus", "Qwen Plus"},
+	{"qwen", "qwen-max", "Qwen Max"},
 }
 
 func configPath() string {

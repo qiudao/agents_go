@@ -208,8 +208,22 @@ func newProvider(prov, model string) (Provider, error) {
 		}
 		return NewGeminiProvider(context.Background(), apiKey, model)
 
+	case "qwen":
+		if model == "" {
+			model = "qwen-plus"
+		}
+		apiKey := os.Getenv("QWEN_API_KEY")
+		if apiKey == "" {
+			cfg := loadConfig()
+			apiKey = cfg["QWEN_API_KEY"]
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("QWEN_API_KEY is required (set in env, .env, or %s)", configPath())
+		}
+		return NewOpenAIProvider(apiKey, "https://dashscope.aliyuncs.com/compatible-mode/v1", model), nil
+
 	default:
-		return nil, fmt.Errorf("unknown provider: %s (use anthropic or gemini)", prov)
+		return nil, fmt.Errorf("unknown provider: %s (use anthropic, gemini, deepseek, or qwen)", prov)
 	}
 }
 
