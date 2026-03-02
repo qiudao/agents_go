@@ -31,15 +31,7 @@ import (
 	"github.com/joho/godotenv"
 )
 
-var dangerousCommands = []string{"rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"}
-
 func runBash(command string) string {
-	for _, d := range dangerousCommands {
-		if strings.Contains(command, d) {
-			return "Error: Dangerous command blocked"
-		}
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
@@ -68,6 +60,19 @@ func executeTool(b ContentBlock) string {
 	case "bash":
 		command, _ := b.Input["command"].(string)
 		fmt.Printf("\033[33m$ %s\033[0m\n", command)
+		if !isCommandAllowed(command, loadAllowedCommands()) {
+			fmt.Printf("Allow? [y]es / [n]o / [a]lways: ")
+			var answer string
+			fmt.Scanln(&answer)
+			switch strings.ToLower(strings.TrimSpace(answer)) {
+			case "n", "no":
+				return "Command denied by user."
+			case "a", "always":
+				prefix := commandPrefix(command)
+				addAllowedCommand(prefix)
+				fmt.Printf("Allowed prefix \"%s\" saved to %s\n", prefix, configPath())
+			}
+		}
 		return runBash(command)
 	case "web_search":
 		query, _ := b.Input["query"].(string)
@@ -80,9 +85,10 @@ func executeTool(b ContentBlock) string {
 		return webFetch(fetchURL, prompt)
 	case "read_file":
 		path, _ := b.Input["path"].(string)
-		limit, _ := b.Input["limit"].(float64) // JSON numbers are float64
+		limit, _ := b.Input["limit"].(float64)  // JSON numbers are float64
+		offset, _ := b.Input["offset"].(float64) // JSON numbers are float64
 		fmt.Printf("\033[33m📖 %s\033[0m\n", path)
-		return runRead(path, int(limit))
+		return runRead(path, int(limit), int(offset))
 	case "write_file":
 		path, _ := b.Input["path"].(string)
 		content, _ := b.Input["content"].(string)
@@ -123,7 +129,7 @@ var tools = []Tool{
 	},
 	{
 		Name:        "read_file",
-		Description: "Read file contents with line numbers.",
+		Description: "Read file contents with line numbers. Rejects binary files and files >10MB.",
 		Properties: map[string]any{
 			"path": map[string]any{
 				"type":        "string",
@@ -132,6 +138,10 @@ var tools = []Tool{
 			"limit": map[string]any{
 				"type":        "integer",
 				"description": "Max lines to read (optional, 0 = all)",
+			},
+			"offset": map[string]any{
+				"type":        "integer",
+				"description": "Number of lines to skip from the start (optional, 0 = none)",
 			},
 		},
 	},
@@ -151,7 +161,7 @@ var tools = []Tool{
 	},
 	{
 		Name:        "edit_file",
-		Description: "Replace exact text in a file (first occurrence only).",
+		Description: "Replace exact text in a file. old_text must match exactly once; include more surrounding context if it matches multiple locations.",
 		Properties: map[string]any{
 			"path": map[string]any{
 				"type":        "string",
@@ -159,7 +169,7 @@ var tools = []Tool{
 			},
 			"old_text": map[string]any{
 				"type":        "string",
-				"description": "Exact text to find",
+				"description": "Exact text to find (must be unique in the file)",
 			},
 			"new_text": map[string]any{
 				"type":        "string",
