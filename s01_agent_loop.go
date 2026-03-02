@@ -76,8 +76,11 @@ func executeTool(b ContentBlock) string {
 		return runBash(command)
 	case "web_search":
 		query, _ := b.Input["query"].(string)
+		count, _ := b.Input["count"].(float64) // JSON numbers are float64
+		region, _ := b.Input["region"].(string)
+		freshness, _ := b.Input["freshness"].(string)
 		fmt.Printf("\033[33m🔍 %s\033[0m\n", query)
-		return webSearch(query)
+		return webSearch(query, int(count), region, freshness)
 	case "web_fetch":
 		fetchURL, _ := b.Input["url"].(string)
 		prompt, _ := b.Input["prompt"].(string)
@@ -119,11 +122,23 @@ var tools = []Tool{
 	},
 	{
 		Name:        "web_search",
-		Description: "Search the web using Google. Returns titles, URLs, and snippets for the top results.",
+		Description: "Search the web using DuckDuckGo. Returns titles, URLs, and snippets for the top results.",
 		Properties: map[string]any{
 			"query": map[string]any{
 				"type":        "string",
 				"description": "The search query",
+			},
+			"count": map[string]any{
+				"type":        "integer",
+				"description": "Number of results (default 5, max 20)",
+			},
+			"region": map[string]any{
+				"type":        "string",
+				"description": "Region code, e.g. us-en, cn-zh, jp-jp (optional)",
+			},
+			"freshness": map[string]any{
+				"type":        "string",
+				"description": "Time filter: d=past day, w=past week, m=past month, y=past year (optional)",
 			},
 		},
 	},
