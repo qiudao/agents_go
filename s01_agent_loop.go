@@ -78,6 +78,22 @@ func executeTool(b ContentBlock) string {
 		prompt, _ := b.Input["prompt"].(string)
 		fmt.Printf("\033[33m🌐 %s\033[0m\n", fetchURL)
 		return webFetch(fetchURL, prompt)
+	case "read_file":
+		path, _ := b.Input["path"].(string)
+		limit, _ := b.Input["limit"].(float64) // JSON numbers are float64
+		fmt.Printf("\033[33m📖 %s\033[0m\n", path)
+		return runRead(path, int(limit))
+	case "write_file":
+		path, _ := b.Input["path"].(string)
+		content, _ := b.Input["content"].(string)
+		fmt.Printf("\033[33m✏️ %s\033[0m\n", path)
+		return runWrite(path, content)
+	case "edit_file":
+		path, _ := b.Input["path"].(string)
+		oldText, _ := b.Input["old_text"].(string)
+		newText, _ := b.Input["new_text"].(string)
+		fmt.Printf("\033[33m✏️ %s\033[0m\n", path)
+		return runEdit(path, oldText, newText)
 	default:
 		return fmt.Sprintf("Unknown tool: %s", b.ToolName)
 	}
@@ -102,6 +118,52 @@ var tools = []Tool{
 			"query": map[string]any{
 				"type":        "string",
 				"description": "The search query",
+			},
+		},
+	},
+	{
+		Name:        "read_file",
+		Description: "Read file contents with line numbers.",
+		Properties: map[string]any{
+			"path": map[string]any{
+				"type":        "string",
+				"description": "File path (relative to working directory)",
+			},
+			"limit": map[string]any{
+				"type":        "integer",
+				"description": "Max lines to read (optional, 0 = all)",
+			},
+		},
+	},
+	{
+		Name:        "write_file",
+		Description: "Write content to a file (creates parent dirs).",
+		Properties: map[string]any{
+			"path": map[string]any{
+				"type":        "string",
+				"description": "File path (relative to working directory)",
+			},
+			"content": map[string]any{
+				"type":        "string",
+				"description": "Content to write",
+			},
+		},
+	},
+	{
+		Name:        "edit_file",
+		Description: "Replace exact text in a file (first occurrence only).",
+		Properties: map[string]any{
+			"path": map[string]any{
+				"type":        "string",
+				"description": "File path (relative to working directory)",
+			},
+			"old_text": map[string]any{
+				"type":        "string",
+				"description": "Exact text to find",
+			},
+			"new_text": map[string]any{
+				"type":        "string",
+				"description": "Replacement text",
 			},
 		},
 	},
