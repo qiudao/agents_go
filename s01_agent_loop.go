@@ -103,6 +103,14 @@ func executeTool(b ContentBlock) string {
 		newText, _ := b.Input["new_text"].(string)
 		fmt.Printf("\033[33m✏️ %s\033[0m\n", path)
 		return runEdit(path, oldText, newText)
+	case "todo":
+		items, _ := b.Input["items"].([]any)
+		fmt.Printf("\033[33m📋 updating todos\033[0m\n")
+		result, err := todo.Update(items)
+		if err != nil {
+			return fmt.Sprintf("Error: %v", err)
+		}
+		return result
 	default:
 		return fmt.Sprintf("Unknown tool: %s", b.ToolName)
 	}
@@ -193,6 +201,24 @@ var tools = []Tool{
 		},
 	},
 	{
+		Name:        "todo",
+		Description: "Update task list. Track progress on multi-step tasks. Pass the full list each time.",
+		Properties: map[string]any{
+			"items": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"id":     map[string]any{"type": "string"},
+						"text":   map[string]any{"type": "string"},
+						"status": map[string]any{"type": "string", "enum": []string{"pending", "in_progress", "completed"}},
+					},
+					"required": []string{"id", "text", "status"},
+				},
+			},
+		},
+	},
+	{
 		Name:        "web_fetch",
 		Description: "Fetch a web page and extract key information. A small model preprocesses the content to return only relevant information.",
 		Properties: map[string]any{
@@ -210,8 +236,17 @@ var tools = []Tool{
 
 // agentLoop is the core pattern: call LLM with tools, execute tool calls,
 // feed results back, repeat until the model stops.
-func agentLoop(provider Provider, messages *[]Message) error {
+// sessionLogger is created once at startup; /log toggles its enabled flag.
+var sessionLogger *Logger
+
+func agentLoop(provider Provider, messages *[]Message, model string) error {
+	roundsSinceTodo := 0
 	for {
+		if sessionLogger != nil {
+			sessionLogger.NextRound()
+			sessionLogger.LogRequest(*messages, tools, model)
+		}
+
 		resp, err := provider.Chat(context.TODO(), *messages, tools)
 		if err != nil {
 			return fmt.Errorf("API error: %w", err)
@@ -227,11 +262,15 @@ func agentLoop(provider Provider, messages *[]Message) error {
 					fmt.Println(b.Text)
 				}
 			}
+			if sessionLogger != nil {
+				sessionLogger.LogResponse(resp.Content, "end_turn", false)
+			}
 			return nil
 		}
 
 		// Execute each tool call, collect results
 		var results []ContentBlock
+		usedTodo := false
 		for _, b := range resp.Content {
 			switch b.Type {
 			case "text":
@@ -249,8 +288,27 @@ func agentLoop(provider Provider, messages *[]Message) error {
 					ToolName: b.ToolName,
 					Text:     output,
 				})
+				if b.ToolName == "todo" {
+					usedTodo = true
+				}
 			}
 		}
+
+		// Nag reminder: nudge the model to update todos if it hasn't recently
+		if usedTodo {
+			roundsSinceTodo = 0
+		} else {
+			roundsSinceTodo++
+		}
+		hasReminder := roundsSinceTodo >= 3 && len(results) > 0
+		if hasReminder {
+			results[len(results)-1].Text += "\n\n<reminder>Update your todos.</reminder>"
+		}
+
+		if sessionLogger != nil {
+			sessionLogger.LogResponse(resp.Content, "tool_use", hasReminder)
+		}
+
 		*messages = append(*messages, Message{Role: "user", Content: results})
 	}
 }
@@ -357,7 +415,7 @@ func main() {
 		os.Exit(1)
 	}
 	cwd, _ := os.Getwd()
-	system := fmt.Sprintf("You are a coding agent at %s. Use bash to solve tasks. Act, don't explain.", cwd)
+	system := fmt.Sprintf("You are a coding agent at %s. Use the todo tool to plan multi-step tasks. Mark in_progress before starting, completed when done. Prefer tools over prose.", cwd)
 
 	var messages []Message
 	messages = append(messages, Message{
@@ -371,12 +429,31 @@ func main() {
 
 
 
+	// Create session logger at startup (always on)
+	sessionLogger, err = newSessionLogger()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not create log file: %v\n", err)
+	}
+
 	rl, err := readline.New("\033[36ms01 >> \033[0m")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 	defer rl.Close()
+
+	// Show hint about previous session (non-blocking)
+	showResumeHint()
+
+	defer func() {
+		// Save session snapshot on exit
+		logFile := ""
+		if sessionLogger != nil {
+			logFile = sessionLogger.Path()
+			sessionLogger.Close()
+		}
+		saveSession(messages, model, logFile)
+	}()
 
 	for {
 		line, err := rl.Readline()
@@ -392,6 +469,24 @@ func main() {
 		}
 
 		// Handle slash commands
+		if query == "/log" {
+			if sessionLogger == nil {
+				fmt.Println("Log file not available.")
+			} else {
+				showLog(sessionLogger.Path())
+			}
+			continue
+		}
+		if query == "/resume" {
+			resumed, todoItems := resumeSession(rl)
+			if resumed != nil {
+				messages = resumed
+				if todoItems != nil {
+					todo.items = todoItems
+				}
+			}
+			continue
+		}
 		if query == "/usage" {
 			showUsage(prov)
 			continue
@@ -425,7 +520,7 @@ func main() {
 			Role:    "user",
 			Content: []ContentBlock{{Type: "text", Text: query}},
 		})
-		if err := agentLoop(provider, &messages); err != nil {
+		if err := agentLoop(provider, &messages, model); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
 	
