@@ -24,6 +24,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -53,6 +54,11 @@ func runBash(command string) string {
 	}
 	return out
 }
+
+// Package-level refs so executeTool and subagent can access them.
+var currentProvider Provider
+var currentModel string
+var skillLoader *SkillLoader
 
 // executeTool dispatches a tool call and returns its output.
 func executeTool(b ContentBlock) string {
@@ -103,6 +109,11 @@ func executeTool(b ContentBlock) string {
 		newText, _ := b.Input["new_text"].(string)
 		fmt.Printf("\033[33m✏️ %s\033[0m\n", path)
 		return runEdit(path, oldText, newText)
+	case "task":
+		prompt, _ := b.Input["prompt"].(string)
+		desc, _ := b.Input["description"].(string)
+		fmt.Printf("\033[33m🔀 task (%s)\033[0m\n", desc)
+		return runSubagent(currentProvider, currentModel, prompt)
 	case "todo":
 		items, _ := b.Input["items"].([]any)
 		fmt.Printf("\033[33m📋 updating todos\033[0m\n")
@@ -111,13 +122,17 @@ func executeTool(b ContentBlock) string {
 			return fmt.Sprintf("Error: %v", err)
 		}
 		return result
+	case "load_skill":
+		name, _ := b.Input["name"].(string)
+		fmt.Printf("\033[33m📚 load_skill(%s)\033[0m\n", name)
+		return skillLoader.GetContent(name)
 	default:
 		return fmt.Sprintf("Unknown tool: %s", b.ToolName)
 	}
 }
 
-// tools available to the agent.
-var tools = []Tool{
+// childTools: tools available to subagents (no task/todo to prevent recursion).
+var childTools = []Tool{
 	{
 		Name:        "bash",
 		Description: "Run a shell command.",
@@ -201,6 +216,48 @@ var tools = []Tool{
 		},
 	},
 	{
+		Name:        "web_fetch",
+		Description: "Fetch a web page and extract key information. A small model preprocesses the content to return only relevant information.",
+		Properties: map[string]any{
+			"url": map[string]any{
+				"type":        "string",
+				"description": "The URL to fetch",
+			},
+			"prompt": map[string]any{
+				"type":        "string",
+				"description": "What information to extract from the page (optional, defaults to general summary)",
+			},
+		},
+	},
+}
+
+// tools: full tool set for the parent agent (childTools + task + todo).
+var tools = append(childTools,
+	Tool{
+		Name:        "task",
+		Description: "Spawn a subagent with fresh context to handle a subtask. It shares the filesystem but not conversation history.",
+		Properties: map[string]any{
+			"prompt": map[string]any{
+				"type":        "string",
+				"description": "Complete task description for the subagent",
+			},
+			"description": map[string]any{
+				"type":        "string",
+				"description": "Short label for terminal display",
+			},
+		},
+	},
+	Tool{
+		Name:        "load_skill",
+		Description: "Load specialized knowledge by name. Use this before tackling unfamiliar topics.",
+		Properties: map[string]any{
+			"name": map[string]any{
+				"type":        "string",
+				"description": "Skill name to load",
+			},
+		},
+	},
+	Tool{
 		Name:        "todo",
 		Description: "Update task list. Track progress on multi-step tasks. Pass the full list each time.",
 		Properties: map[string]any{
@@ -218,21 +275,7 @@ var tools = []Tool{
 			},
 		},
 	},
-	{
-		Name:        "web_fetch",
-		Description: "Fetch a web page and extract key information. A small model preprocesses the content to return only relevant information.",
-		Properties: map[string]any{
-			"url": map[string]any{
-				"type":        "string",
-				"description": "The URL to fetch",
-			},
-			"prompt": map[string]any{
-				"type":        "string",
-				"description": "What information to extract from the page (optional, defaults to general summary)",
-			},
-		},
-	},
-}
+)
 
 // agentLoop is the core pattern: call LLM with tools, execute tool calls,
 // feed results back, repeat until the model stops.
@@ -414,8 +457,14 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Hint: run the program and type /models to configure\n")
 		os.Exit(1)
 	}
+	currentProvider = provider
+	currentModel = model
 	cwd, _ := os.Getwd()
+	skillLoader = NewSkillLoader(filepath.Join(configDir(), "skills"))
 	system := fmt.Sprintf("You are a coding agent at %s. Use the todo tool to plan multi-step tasks. Mark in_progress before starting, completed when done. Prefer tools over prose.", cwd)
+	if descs := skillLoader.GetDescriptions(); descs != "(no skills available)" {
+		system += "\n\nSkills available (use load_skill to access):\n" + descs
+	}
 
 	var messages []Message
 	messages = append(messages, Message{
@@ -510,6 +559,8 @@ func main() {
 			}
 			provider = newProv
 			prov, model = choice.Provider, choice.Model
+			currentProvider = provider
+			currentModel = model
 			fmt.Printf("Switched to: %s/%s (saved to %s)\n", prov, model, configPath())
 		
 			messages = messages[:2]
