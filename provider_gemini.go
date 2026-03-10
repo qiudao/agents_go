@@ -126,6 +126,10 @@ func toGeminiTool(tools []Tool) *genai.Tool {
 func fromGeminiResponse(resp *genai.GenerateContentResponse) *Response {
 	r := &Response{}
 
+	if resp.UsageMetadata != nil {
+		r.InputTokens = int(resp.UsageMetadata.PromptTokenCount)
+	}
+
 	if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
 		return r
 	}

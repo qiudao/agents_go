@@ -63,6 +63,9 @@ type oaiResponse struct {
 		Message      oaiMessage `json:"message"`
 		FinishReason string     `json:"finish_reason"`
 	} `json:"choices"`
+	Usage *struct {
+		PromptTokens int `json:"prompt_tokens"`
+	} `json:"usage,omitempty"`
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error,omitempty"`
@@ -222,6 +225,10 @@ func fromOpenAIResponse(resp oaiResponse) *Response {
 	choice := resp.Choices[0]
 	r := &Response{
 		WantsTool: choice.FinishReason == "tool_calls",
+	}
+
+	if resp.Usage != nil {
+		r.InputTokens = resp.Usage.PromptTokens
 	}
 
 	if choice.Message.Content != "" {

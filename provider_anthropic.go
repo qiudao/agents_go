@@ -90,7 +90,8 @@ func toAnthropicTools(tools []Tool) []anthropic.ToolUnionParam {
 
 func fromAnthropicResponse(resp *anthropic.Message) *Response {
 	r := &Response{
-		WantsTool: resp.StopReason == anthropic.StopReason(anthropic.MessageStopReasonToolUse),
+		WantsTool:   resp.StopReason == anthropic.StopReason(anthropic.MessageStopReasonToolUse),
+		InputTokens: int(resp.Usage.InputTokens),
 	}
 	for _, block := range resp.Content {
 		switch v := block.AsAny().(type) {

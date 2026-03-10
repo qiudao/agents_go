@@ -31,6 +31,7 @@ type Tool struct {
 
 // Response is what the provider returns from a Chat call.
 type Response struct {
-	WantsTool bool           // true = model wants to call a tool
-	Content   []ContentBlock
+	WantsTool   bool           // true = model wants to call a tool
+	Content     []ContentBlock
+	InputTokens int
 }
