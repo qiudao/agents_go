@@ -126,6 +126,9 @@ func executeTool(b ContentBlock) string {
 		name, _ := b.Input["name"].(string)
 		fmt.Printf("\033[33m📚 load_skill(%s)\033[0m\n", name)
 		return skillLoader.GetContent(name)
+	case "compact":
+		fmt.Printf("\033[33m🗜️ compact\033[0m\n")
+		return "Manual compression requested."
 	default:
 		return fmt.Sprintf("Unknown tool: %s", b.ToolName)
 	}
@@ -258,6 +261,16 @@ var tools = append(childTools,
 		},
 	},
 	Tool{
+		Name:        "compact",
+		Description: "Compress conversation history. Use when context feels cluttered or you're running low on space.",
+		Properties: map[string]any{
+			"focus": map[string]any{
+				"type":        "string",
+				"description": "What to preserve in the summary (optional)",
+			},
+		},
+	},
+	Tool{
 		Name:        "todo",
 		Description: "Update task list. Track progress on multi-step tasks. Pass the full list each time.",
 		Properties: map[string]any{
@@ -284,7 +297,23 @@ var sessionLogger *Logger
 
 func agentLoop(provider Provider, messages *[]Message, model string) error {
 	roundsSinceTodo := 0
+	lastInputTokens := 0
 	for {
+		// Layer 1: micro_compact before each LLM call
+		microCompact(*messages)
+
+		// Layer 2: auto_compact if input tokens exceeded threshold
+		if lastInputTokens > compactThreshold {
+			fmt.Println("[auto_compact triggered]")
+			tPath := saveTranscript(transcriptDir(), *messages)
+			if tPath != "" {
+				fmt.Printf("[transcript saved: %s]\n", tPath)
+			}
+			summary := summarizeForCompact(provider, *messages, model)
+			*messages = buildCompactedMessages(summary, tPath)
+			lastInputTokens = 0
+		}
+
 		if sessionLogger != nil {
 			sessionLogger.NextRound()
 			sessionLogger.LogRequest(*messages, tools, model)
@@ -294,6 +323,7 @@ func agentLoop(provider Provider, messages *[]Message, model string) error {
 		if err != nil {
 			return fmt.Errorf("API error: %w", err)
 		}
+		lastInputTokens = resp.InputTokens
 
 		// Append assistant turn
 		*messages = append(*messages, Message{Role: "assistant", Content: resp.Content})
@@ -314,6 +344,7 @@ func agentLoop(provider Provider, messages *[]Message, model string) error {
 		// Execute each tool call, collect results
 		var results []ContentBlock
 		usedTodo := false
+		manualCompact := false
 		for _, b := range resp.Content {
 			switch b.Type {
 			case "text":
@@ -334,6 +365,9 @@ func agentLoop(provider Provider, messages *[]Message, model string) error {
 				if b.ToolName == "todo" {
 					usedTodo = true
 				}
+				if b.ToolName == "compact" {
+					manualCompact = true
+				}
 			}
 		}
 
@@ -353,6 +387,18 @@ func agentLoop(provider Provider, messages *[]Message, model string) error {
 		}
 
 		*messages = append(*messages, Message{Role: "user", Content: results})
+
+		// Layer 3: manual compact triggered by the compact tool
+		if manualCompact {
+			fmt.Println("[manual compact]")
+			tPath := saveTranscript(transcriptDir(), *messages)
+			if tPath != "" {
+				fmt.Printf("[transcript saved: %s]\n", tPath)
+			}
+			summary := summarizeForCompact(provider, *messages, model)
+			*messages = buildCompactedMessages(summary, tPath)
+			lastInputTokens = 0
+		}
 	}
 }
 
