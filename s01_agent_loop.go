@@ -109,10 +109,10 @@ func executeTool(b ContentBlock) string {
 		newText, _ := b.Input["new_text"].(string)
 		fmt.Printf("\033[33m✏️ %s\033[0m\n", path)
 		return runEdit(path, oldText, newText)
-	case "task":
+	case "subagent":
 		prompt, _ := b.Input["prompt"].(string)
 		desc, _ := b.Input["description"].(string)
-		fmt.Printf("\033[33m🔀 task (%s)\033[0m\n", desc)
+		fmt.Printf("\033[33m🔀 subagent (%s)\033[0m\n", desc)
 		return runSubagent(currentProvider, currentModel, prompt)
 	case "todo":
 		items, _ := b.Input["items"].([]any)
@@ -134,7 +134,7 @@ func executeTool(b ContentBlock) string {
 	}
 }
 
-// childTools: tools available to subagents (no task/todo to prevent recursion).
+// childTools: tools available to subagents (no subagent/todo to prevent recursion).
 var childTools = []Tool{
 	{
 		Name:        "bash",
@@ -234,10 +234,10 @@ var childTools = []Tool{
 	},
 }
 
-// tools: full tool set for the parent agent (childTools + task + todo).
+// tools: full tool set for the parent agent (childTools + subagent + todo).
 var tools = append(childTools,
 	Tool{
-		Name:        "task",
+		Name:        "subagent",
 		Description: "Spawn a subagent with fresh context to handle a subtask. It shares the filesystem but not conversation history.",
 		Properties: map[string]any{
 			"prompt": map[string]any{
